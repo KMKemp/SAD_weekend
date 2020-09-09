@@ -7,8 +7,9 @@ THE SAD WEEKEND: A PERILOUS NORTH AMERICAN TRADITION
 <ul>
 <li><a href="https://joey711.github.io/phyloseq/" rel="nofollow">phyloseq</a></li>
 <li><a href="https://cran.r-project.org/package=vegan" rel="nofollow">vegan</a></li>
-<li><a href="https://github.com/ggloor/CoDaSeq">deseq2</a></li>
-<li><a href="https://vegmod.ctfc.cat/software/indicspecies/">deseq2</a></li>
+<li><a href="https://github.com/ggloor/CoDaSeq">CoDaSeq</a></li>
+<li><a href="https://vegmod.ctfc.cat/software/indicspecies/">indicspecies</a></li>
+<li><a href="~/Box/ANCOM-master/scripts/ancom_v2.1.R">ANCOM-II</a></li>
 </ul>
 <h3>Raw Data:</h3>
 <p><span>The original sequencing reads are available for download via NCBI&rsquo;s Sequence Read Archive under&nbsp;<a href="https://www.ncbi.nlm.nih.gov/sra/PRJNA615647" rel="nofollow">Bioproject&nbsp;<strong _ngcontent-atv-c11="" class="left">PRJNA615647</strong>.</a></span></p>

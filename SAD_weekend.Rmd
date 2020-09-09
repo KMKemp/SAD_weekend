@@ -1,0 +1,928 @@
+---
+title: 'The SAD weekend: a Perilous North American Tradition '
+author: "Keri Kemp"
+date: "7/20/2020"
+output:
+  html_document: default
+  fig_crop: no
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Project Overview
+
+To determine how diet affects the gut microbiota, pain, and recovery from inflammatory injury, CD1 mice (ICR:Crl) were fed diets varying in fat source: 1) standard chow (REG; NIH-31, Harlan Teklad), 2) standard American Diet (SAD, Envigo TD.140536), 3) Anti-Inflammatory Diet (AID, Envigo TD.150364). A fourth diet group was included to determine the effect of alternating between the diets in which mice were fed the AID diet Monday to Friday and the SAD diet on Saturday and Sunday. This diet shift aimed to model a pattern of eating that included "cheat days" on the weekends with healthy eating during the week. After 14 weeks of diet exposure, when mice were 16 weeks old, a fecal pellet was collected for sequencing of the microbial 16S rRNA gene.
+
+## Raw Data
+The original sequencing reads are available for download via NCBI’s Sequence Read Archive under Bioproject PRJNA615647: https://www.ncbi.nlm.nih.gov/sra/PRJNA615647.
+
+``````{r message=FALSE}
+#Load libraries
+library(tidyverse)
+library(phyloseq)
+library(vegan)
+library(ape)
+library(CoDaSeq)
+library(zCompositions)
+library(Rmisc)
+library(agricolae)
+library(rcompanion)
+library(knitr)
+library(kableExtra)
+library(cowplot)
+library(genefilter)
+library(naniar)
+library(car)
+library(lmtest)
+library(ggfortify)
+library(indicspecies)
+library(pheatmap)
+library(btools)
+library(RVAideMemoire)
+library(data.table)
+library(Hmisc)
+library(exactRankTests)
+library(compositions)
+# Set working directory and file paths 
+setwd("~/Box/_Sorge_re-analyze")
+```
+
+## Import the data into phyloseq
+
+```{r}
+# Set file paths 
+biom_file = "~/Box/_Sorge_re-analyze/R_input/raw_asv_json.biom"
+map_file = "~/Box/_Sorge_re-analyze/R_input/recoverytime_mapping_file.txt"
+tree_file = "~/Box/_Sorge_re-analyze/R_input/phylogeny.tre"
+
+# Import biom table, mapping file, and tree file
+biom <- import_biom(biom_file, parseFunction = parse_taxonomy_default)
+map <- import_qiime_sample_data(map_file)
+treefile <- read_tree(tree_file)
+
+# merge in phyloseq object
+AID <- merge_phyloseq(biom,map,treefile)
+
+# Inspect the phyloseq object
+AID
+rank_names(AID)
+
+# Rename columns in the tax_table
+tax <- data.frame(tax_table(AID))
+tax.clean <- data.frame(row.names = row.names(tax),
+Kingdom = str_replace(tax[,1], "D_0__",""),
+Phylum = str_replace(tax[,2], "D_1__",""),
+Class = str_replace(tax[,3], "D_2__",""),
+Order = str_replace(tax[,4], "D_3__",""),
+Family = str_replace(tax[,5], "D_4__",""),
+Genus = str_replace(tax[,6], "D_5__",""),
+Species = str_replace(tax[,7], "D_6__",""),
+stringsAsFactors = FALSE)
+tax.clean[is.na(tax.clean)] <- ""
+tax_table(AID) <- as.matrix(tax.clean)
+rank_names(AID)
+```
+
+
+####Prune samples with low sequence count from the dataset
+``````{r}
+# Prune samples with less than 1,000 reads 
+AID = prune_samples(sample_sums(AID)>=1000, AID)
+AID
+sample_data(AID)
+
+```
+
+####Prune rare taxa and fix non-descriptive taxa
+``````{r, results=FALSE, message=FALSE}
+# A -- The count value minmum threshold
+# k -- The number of samples in which a taxa exceeded A
+# A taxa is retained in the dataset if it exceeds the value A in at least k samples.
+flist = filterfun(kOverA(2, 5))
+AID2 <- filter_taxa(AID, flist, prune=TRUE)
+AID2
+
+get_taxa_unique(AID2, "Phylum") #okay
+get_taxa_unique(AID2, "Class") #okay
+get_taxa_unique(AID2, "Order") #okay
+get_taxa_unique(AID2, "Family") 
+get_taxa_unique(AID2, "Genus") 
+get_taxa_unique(AID2, "Species")
+ 
+
+# change these non-decriptive labels to NA in order to use the following code to "clean" the taxonomy assignments
+# make a list of things to replace with an NA
+na_strings <- c("unidentified","uncultured bacterium","gut metagenome","uncultured","mouse gut metagenome", 
+                "uncultured rumen bacterium","uncultured bacterium","uncultured organism","human gut metagenome",
+                "uncultured Lactobacillus sp.","uncultured Lactobacillus sp.", "uncultured Rheinheimera sp.", 
+                "uncultured Lachnospiraceae bacterium","uncultured Clostridiales bacterium","metagenome",
+                "uncultured Ruminococcaceae bacterium", "uncultured Bacteroidales bacterium",
+                "D\\_3\\_\\_Clostridiales_unclassified","D\\_3\\_\\_Mollicutes_RF39_unclassified",
+                "D\\_3\\_\\_Clostridiales_unclassified","D\\_3\\_\\_Mollicutes_RF39_unclassified",
+                "D\\_4\\_\\_Lachnospiraceae_unclassified","D\\_4\\_\\_Ruminococcaceae_unclassified",
+                "D\\_4\\_\\_Enterobacteriaceae_unclassified","D\\_4\\_\\_Erysipelotrichaceae_unclassified",
+                "D\\_5\\_\\_Lachnospiraceae_NK4A136_group_unclassified","D\\_5\\_\\_GCA-900066225_unclassified", 
+                "D\\_5\\_\\_Ruminococcaceae_UCG-013_unclassified","D\\_5\\_\\_Caproiciproducens_unclassified",  
+                "D\\_5\\_\\_Peptococcus_unclassified","D\\_5\\_\\_Alistipes_unclassified", 
+                "D\\_5\\_\\_uncultured_unclassified","D\\_5\\_\\_Coprococcus_3_unclassified",
+                "D\\_5\\_\\_Ruminococcaceae_UCG-014_unclassified","D\\_5\\_\\_Pseudomonas_unclassified",
+                "D\\_5\\_\\_Acinetobacter_unclassified","D\\_5\\_\\_Streptomyces_unclassified",
+                "D\\_5\\_\\_Bacteroides_unclassified","D\\_5\\_\\_Lachnoclostridium_unclassified", 
+                "D\\_5\\_\\_Ruminococcus_1_unclassified","D\\_5\\_\\_Odoribacter_unclassified")
+
+# https://cran.r-project.org/web/packages/naniar/vignettes/replace-with-na.html
+tax <- data.frame(tax_table(AID2))
+tax2<-tax %>%
+  rownames_to_column( var = "ASV")  %>%
+  naniar::replace_with_na_all(condition = ~.x %in% na_strings) %>%
+  column_to_rownames (var = "ASV")
+
+####### Fill holes in the tax table
+tax.clean <- tax2
+tax.clean[is.na(tax.clean)] <- ""
+for (i in 1:nrow(tax.clean)){
+  if (tax.clean[i,2] == ""){
+    kingdom <- paste("unclassified_", tax.clean[i,1], sep = "")
+    tax.clean[i, 2:7] <- kingdom
+  } else if (tax.clean[i,3] == ""){
+    phylum <- paste("unclassified_", tax.clean[i,2], sep = "")
+    tax.clean[i, 3:7] <- phylum
+  } else if (tax.clean[i,4] == ""){
+    class <- paste("unclassified_", tax.clean[i,3], sep = "")
+    tax.clean[i, 4:7] <- class
+  } else if (tax.clean[i,5] == ""){
+    order <- paste("unclassified_", tax.clean[i,4], sep = "")
+    tax.clean[i, 5:7] <- order
+  } else if (tax.clean[i,6] == ""){
+    family <- paste("unclassified_", tax.clean[i,5], sep = "")
+    tax.clean[i, 6:7] <- family
+  } else if (tax.clean[i,7] == ""){
+    tax.clean$Species[i] <- paste("unclassified",tax.clean$Genus[i], sep = "_")
+  }
+}
+
+
+tax.clean[is.na(tax.clean)] <- ""
+for (i in 1:nrow(tax.clean)){
+  if (tax.clean[i,2] == ""){
+    kingdom <- paste("Kingdom_", tax.clean[i,1], sep = "")
+    tax.clean[i, 2:7] <- kingdom
+  } else if (tax.clean[i,3] == ""){
+    phylum <- paste("Phylum_", tax.clean[i,2], sep = "")
+    tax.clean[i, 3:7] <- phylum
+  } else if (tax.clean[i,4] == ""){
+    class <- paste("Class_", tax.clean[i,3], sep = "")
+    tax.clean[i, 4:7] <- class
+  } else if (tax.clean[i,5] == ""){
+    order <- paste("Order_", tax.clean[i,4], sep = "")
+    tax.clean[i, 5:7] <- order
+  } else if (tax.clean[i,6] == ""){
+    family <- paste("Family_", tax.clean[i,5], sep = "")
+    tax.clean[i, 6:7] <- family
+  } else if (tax.clean[i,7] == ""){
+    tax.clean$Species[i] <- paste("Genus",tax.clean$Genus[i], sep = "_")
+  }
+}
+tax_table(AID2) <- as.matrix(tax.clean)
+
+AID2
+# mean, max and min of sample read counts
+min(sample_sums(AID2)) #31863
+mean(sample_sums(AID2)) #52861.78
+max(sample_sums(AID2)) #83610
+```
+
+####Fig. 5 Barchart
+```{r , message=FALSE,fig.show='hide',results=FALSE}
+# Transform to relative abundance
+AID_norm <- transform_sample_counts(AID2, function(x) 100 * x/sum(x))
+
+# Prepare to make a barchart at order level
+AID_Orders <- AID_norm  %>%
+  tax_glom(taxrank = "Order") %>% # agglomerate taxa at order level
+  psmelt() %>%                    # Melt phyloseq object to long format for producing graphics with ggplot2
+  filter(Abundance > 1.0)  %>%    # Filter out orders below 1% in each sample
+  arrange(desc(Phylum),desc(Class),desc(Order))
+
+# Check how many Orders 
+sample_data(AID_Orders)$Order #13
+
+# Sum remaining taxa with a relative abundance < 1% and make a new dataframe
+Remainders <- (AID_Orders) %>%
+  dplyr::group_by(SampleID,Diet,Sex,Cage) %>% 
+  dplyr::summarise(Abundance = (100-sum(Abundance))) %>% 
+  as.data.frame()
+Remainders$Order<-"Orders < 1%"
+Remainders$Phylum<-"_Orders < 1%"
+Remainders$Class<-"_Orders < 1%"
+Remainders$Kingdom<-"Bacteria"
+
+# Compile dataframes
+AID_barchart <- full_join(AID_Orders,Remainders)
+AID_barchart$Order <- as.factor(AID_barchart$Order)
+
+# Reorder based on Phylogeny
+AID_barchart <- AID_barchart[with(AID_barchart, order(Phylum,Class,Order)),]
+AID_barchart$Order <- as.factor(AID_barchart$Order)
+levels(AID_barchart$Order)
+                                                    
+# Lock in Order level order
+AID_barchart$Order <- factor(AID_barchart$Order, 
+      levels = c("Orders < 1%","Bifidobacteriales","Coriobacteriales","Bacteroidales",
+                "Deferribacterales","Bacillales","Lactobacillales",
+                "Clostridiales","Erysipelotrichales", "Enterobacteriales",
+                "Pseudomonadales","Mollicutes RF39","Verrucomicrobiales"))  
+                                                            
+# Lock in Diet level order
+AID_barchart$Diet <- factor(sample_data(AID_barchart)$Diet, levels = c("REG","AID","SAD","AID-SAD"))
+
+write.csv(AID_barchart, file = "R_output/AID_barchart.csv")
+
+# Function for making a custom color palette for plotting
+library(RColorBrewer)
+# Function for plotting colors side-by-side from here: https://cran.r-project.org/web/packages/colorspace/index.html
+pal <- function(col, border = "light gray", ...){
+  n <- length(col)
+  plot(0, 0, type="n", xlim = c(0, 1), ylim = c(0, 1),
+       axes = FALSE, xlab = "", ylab = "", ...)
+  rect(0:(n-1)/n, 0, 1:n/n, 1, col = col, border = border)
+}
+
+colors2=c("grey", 
+          "#0072b2", "#7BAFDE",            #blue
+          "#f2a045","#f0e442",             #orange/yellow
+          "#117755","#80c175","#CAE0AB",   #green
+          "#44AAAA","#9cdada",             #tourqoise
+          "#882E72", "#B178A6",            #purple
+          "#d55e00")                       #red
+pal(colors2)
+```
+
+```{r, fig.width = 11, fig.asp = 0.618}
+# Plot barchart for Orders for publication
+# Export eps as 950 x 500
+AID_bc <- ggplot(AID_barchart, aes(x = SampleID, y = Abundance, fill = Order))+
+  geom_bar(stat = "identity", colour = "black",size=0.25,width=1)+
+  scale_fill_manual(values = colors2,
+      labels=c("Orders < 1%","Actinobacteria, Actinobacteria, Bifidobacteriales", 
+              "Actinobacteria, Coriobacteriia, Coriobacteriales", 
+              "Bacteroidetes, Bacteroidia, Bacteroidales",
+              "Deferribacteres, Deferribacteres, Deferribacterales", "Firmicutes, Bacilli, Bacillales", 
+              "Firmicutes, Bacilli, Lactobacillales", "Firmicutes, Clostridia, Clostridiales", 
+              "Firmicutes, Erysipelotrichi, Erysipelotrichales", "Tenericutes, Mollicutes, RF39",
+              "Proteobacteria, Gammaproteobacteria, Enterobacteriales", 
+              "Proteobacteria, Gammaproteobacteria, Pseudomonadales", 
+              "Verrucomicrobia, Verrucomicrobiae, Verrucomicrobiales"))+
+  labs(x = " ",y = "Relative Abundance (%)")+
+  labs(fill='Bacterial Order')+
+  facet_grid(~Diet, space = "free", scales="free", switch = "x", labeller = labeller(.multi_line = FALSE))+
+  theme_bw()+
+  theme(plot.title = element_text(hjust = 0.5, size=14,face="bold"))+
+  theme(axis.text.x = element_blank(), axis.ticks.x=element_blank())+
+  theme(axis.text.y = element_text(size=11), axis.title.y=element_text(size=12,face="bold"))+
+  theme(legend.text=element_text(size=11), legend.title=element_text(size=12,face="bold"))+
+  theme(panel.border = element_rect(colour="black", fill=NA, size=0.75, linetype="solid"))+
+  theme(strip.text.x = element_text(size=11,face="bold"))+
+  theme(plot.margin = unit(c(0.2, 0, 0, 0), "cm"))+
+  scale_y_continuous(expand = c(0,0), breaks = seq(0, 100, 10))+
+  scale_x_discrete(expand = c(0,0))
+AID_bc
+```
+
+####Fig 6. Ralative abundance of major Phyla
+```{r, fig.show='hide'}
+# Agglomerate at Phylum
+Phyla <- AID_norm  %>%
+  tax_glom(taxrank = "Phylum") %>%                     
+  psmelt()   
+# Summarize at Phylum with Rmisc function
+Phyla_sum <- summarySE(Phyla, measurevar="Abundance", groupvars=c("Phylum","Diet"))
+# Export these tables
+write.csv(Phyla,"./R_output/Phyla.csv", row.names=FALSE)
+write.csv(Phyla_sum,"./R_output/Phyla_sum.csv", row.names=FALSE)
+
+# Filter for stats and graphing
+Actino <- Phyla  %>%
+  filter(Phylum == "Actinobacteria") 
+Bacto <- Phyla  %>%
+  filter(Phylum == "Bacteroidetes") 
+Firm <- Phyla  %>%
+  filter(Phylum == "Firmicutes") 
+Proteo <- Phyla  %>%
+  filter(Phylum == "Proteobacteria") 
+
+# Set colors (https://www.color-hex.com/color-palette/49436)
+cols = c("REG" = "#0072b2", "SAD" = "#d55e00", "AID-SAD" = "#f0e442", "AID" = "#009e73" )
+
+# Re-arrange for plotting
+Proteo$Diet <- factor(sample_data(Proteo)$Diet, levels = c("REG","SAD","AID-SAD","AID"))
+Proteo_plot <- ggplot(Proteo, aes(x=Diet, y=Abundance,  fill=Diet)) + 
+  geom_boxplot(outlier.size = 1) + scale_fill_manual(values = cols) + geom_boxplot(outlier.size = 1) + 
+  labs(x = " ",y = "Proteobacteria \n Relative Abundance (%)") + theme(legend.position="none") + ylim (0,50) + 
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+  theme(text = element_text(size=14),axis.text.x=element_text(size=14))+
+  theme(axis.title.y = element_text(size=16))
+
+Bacto$Diet <- factor(sample_data(Bacto)$Diet, levels = c("REG","SAD","AID-SAD","AID"))
+Bacto_plot <- ggplot(Bacto, aes(x=Diet, y=Abundance,  fill=Diet)) + 
+  geom_boxplot(outlier.size = 1) + scale_fill_manual(values = cols) + geom_boxplot(outlier.size = 1) + 
+  labs(x = " ",y = "Bacteroidetes \n Relative Abundance (%)") + theme(legend.position="none") + ylim (0,50) + 
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+  theme(text = element_text(size=14),axis.text.x=element_text(size=14)) +
+  theme(axis.title.y = element_text(size=16))
+
+Firm$Diet <- factor(sample_data(Firm)$Diet, levels = c("REG","SAD","AID-SAD","AID"))
+Firm_plot <- ggplot(Firm, aes(x=Diet, y=Abundance,  fill=Diet)) + 
+  geom_boxplot(outlier.size = 1) + scale_fill_manual(values = cols) + geom_boxplot(outlier.size = 1) + 
+  labs(x = " ",y = "Firmicutes \n Relative Abundance (%)") + theme(legend.position="none") + ylim (0,80) + 
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+  theme(text = element_text(size=14),axis.text.x=element_text(size=14))+
+  theme(axis.title.y = element_text(size=16))
+
+Actino$Diet <- factor(sample_data(Actino)$Diet, levels = c("REG","SAD","AID-SAD","AID"))
+Actino_plot <- ggplot(Actino, aes(x=Diet, y=Abundance,  fill=Diet)) + 
+  geom_boxplot(outlier.size = 1) + scale_fill_manual(values = cols) + geom_boxplot(outlier.size = 1) + 
+  labs(x = " ",y = "Actinobacteria \n Relative Abundance (%)") + theme(legend.position="none") + ylim (0,80) + 
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+  theme(text = element_text(size=14),axis.text.x=element_text(size=14))+
+  theme(axis.title.y = element_text(size=16))
+```
+
+```{r, fig.align='center', fig.width = 9, fig.asp = 0.618}
+# Combine Plots
+# Export eps at 925w x 750h
+theme_set(theme_cowplot())
+Phyla_Plot <- plot_grid(Actino_plot, Bacto_plot, Firm_plot, Proteo_plot,  align = 'v', ncol = 2)
+Phyla_Plot
+```
+
+####Statistics for Figure 6
+```{r, fig.align='center', out.width="80%"}
+# Histograms
+# Create 2x2 plot environment  
+par(mfrow = c(2, 2))
+# Plot each Metric
+plotNormalHistogram((log(Proteo$Abundance)), main= "Proteobacteria")
+plotNormalHistogram((log(max(Firm$Abundance+1) - Firm$Abundance)), main= "Firmicutes") 
+plotNormalHistogram(Bacto$Abundance, main= "Bacteroidetes")
+plotNormalHistogram((log(Actino$Abundance)), main= "Actinobacteria")
+
+# Test for normality 
+shapiro.test(log(Proteo$Abundance))
+shapiro.test((log(max(Firm$Abundance+1) - Firm$Abundance)))
+shapiro.test(Bacto$Abundance) 
+shapiro.test(log(Actino$Abundance))
+```
+
+#### Actinobacteria
+```{r, fig.align='center', out.width="80%"}
+####### Actinobacteria #######
+lm <-glm(log(Actino$Abundance) ~ Diet*Cage,  data=Actino)
+summary(lm)
+car::vif(lm)
+sstable <-car::Anova(lm , type = c(2), test.statistic=c("F")) #Type II is more powerful when there is no interaction
+# The following code adds a column to the sstable object with partial eta-squared estimates for each effect:
+sstable$PES <- c(sstable$'Sum Sq'[-nrow(sstable)], NA)/(sstable$'Sum Sq' + sstable$'Sum Sq'[nrow(sstable)]) 
+# Creating an html ANOVA table 
+options(knitr.kable.NA = '') # this will hide missing values in the kable table
+kable(sstable, digits = 3, caption = "Actinobacteria ANOVA table") %>%
+  kable_styling(full_width = FALSE)
+
+# Breusch-Pagan test for heteroskedasticity 
+# p>0.05, so we fail to reject the null hypothesis that the variance of the residuals is constant
+lmtest::bptest(lm)
+
+# Posthoc multiple comparisons via tukey's HSD test in agricolae
+# P-values
+agricolae::HSD.test(lm,"Diet", group=TRUE,
+                main="Affect of Diet on Actinobacteria", console=TRUE)
+
+# Create 2x2 plot environment
+par(mfrow = c(2, 2), mar=c(5,6,4,1)+.1)
+# Plot data
+boxplot((log(Actino$Abundance)) ~ Diet, data=Actino,
+        ylab="Log Transformed \n Relative Abundance (RA) ",
+        xlab="Diet", main = "Actinobacteria RA (%)")
+# Plot residules histogram
+x = (residuals(lm))
+plotNormalHistogram(x, main = "Residules Histogram")
+# Normal probability plot 
+qqnorm(residuals(lm), ylab="Sample Quantiles \n for Residuals", main = "Normal Probability Plot")
+qqline(residuals(lm), col="red")
+# Simple scatterplot between residuals and predicted values. It should look more or less random.
+plot(fitted(lm), residuals(lm), main = "Residuals vs. Predicted Values")
+```
+
+#### Bacteroidetes
+```{r, fig.align='center', out.width="80%"}
+####### Bacteroidetes #######
+lm <- glm(Bacto$Abundance ~ Diet*Cage, data=Bacto)
+summary(lm)
+car::vif(lm)
+sstable <-car::Anova(lm , type = c(2), test.statistic=c("F")) #Type II is more powerful when there is no interaction
+# The following code adds a column to the sstable object with partial eta-squared estimates for each effect:
+sstable$PES <- c(sstable$'Sum Sq'[-nrow(sstable)], NA)/(sstable$'Sum Sq' + sstable$'Sum Sq'[nrow(sstable)]) 
+# Creating an html ANOVA table 
+options(knitr.kable.NA = '') # this will hide missing values in the kable table
+kable(sstable, digits = 3, caption = "Bacteroidetes ANOVA table") %>%
+  kable_styling(full_width = FALSE)
+
+# Breusch-Pagan test for heteroskedasticity 
+# p>0.05, so we fail to reject the null hypothesis that the variance of the residuals is constant
+lmtest::bptest(lm)
+
+# No post-hoc tests beacuse the global test is not significant)
+
+# Create 2x2 plot environment
+par(mfrow = c(2, 2), mar=c(5,6,4,1)+.1)
+# Plot data
+boxplot(Abundance ~ Diet, data=Bacto,
+        ylab="Relative Abundance (RA)",
+        xlab="Diet", main = "Bacteroidetes RA (%)")
+# Plot residules histogram
+x = (residuals(lm))
+plotNormalHistogram(x, main = "Residules Histogram")
+# Normal probability plot 
+qqnorm(residuals(lm), ylab="Sample Quantiles \n for Residuals", main = "Normal Probability Plot")
+qqline(residuals(lm), col="red")
+# Simple scatterplot between residuals and predicted values. It should look more or less random.
+plot(fitted(lm), residuals(lm), main = "Residuals vs. Predicted Values")
+```
+
+#### Firmicutes
+```{r, fig.align='center', out.width="80%"}
+####### Firmicutes #######
+lm <- glm((log(max(Firm$Abundance+1) - Firm$Abundance)) ~ Diet*Cage, data=Firm)
+summary(lm)
+car::vif(lm)
+sstable <-car::Anova(lm , type = c(2), test.statistic=c("F")) #Type II is more powerful when there is no interaction
+# The following code adds a column to the sstable object with partial eta-squared estimates for each effect:
+sstable$PES <- c(sstable$'Sum Sq'[-nrow(sstable)], NA)/(sstable$'Sum Sq' + sstable$'Sum Sq'[nrow(sstable)]) 
+# Creating an html ANOVA table 
+options(knitr.kable.NA = '') # this will hide missing values in the kable table
+kable(sstable, digits = 3, caption = "Firmicutes ANOVA table") %>%
+  kable_styling(full_width = FALSE)
+
+# Breusch-Pagan test for heteroskedasticity 
+# p>0.05, so we we fail to reject the null hypothesis that the variance of the residuals is constant
+lmtest::bptest(lm)
+
+# No post-hoc tests beacuse the global test is not significant)
+
+# Create 2x2 plot environment
+par(mfrow = c(2, 2), mar=c(5,6,4,1)+.1)
+# Plot data
+boxplot((log(max(Firm$Abundance+1) - Firm$Abundance)) ~ Diet, data=Firm,
+        ylab="Relative Abundance (RA)",
+        xlab="Diet", main = "Firmicutes RA (%)")
+# Plot residules histogram
+x = (residuals(lm))
+plotNormalHistogram(x, main = "Residules Histogram")
+# Normal probability plot 
+qqnorm(residuals(lm), ylab="Sample Quantiles \n for Residuals", main = "Normal Probability Plot")
+qqline(residuals(lm), col="red")
+# Simple scatterplot between residuals and predicted values. It should look more or less random.
+plot(fitted(lm), residuals(lm), main = "Residuals vs. Predicted Values")
+```
+
+#### Proteobacteria
+```{r, fig.align='center', out.width="80%"}
+####### Proteobacteria #######
+lm <- glm(log(Proteo$Abundance) ~ Diet*Cage, data=Proteo)
+summary(lm)
+car::vif(lm)
+sstable <-car::Anova(lm , type = c(2), test.statistic=c("F")) #Type II is more powerful when there is no interaction
+# The following code adds a column to the sstable object with partial eta-squared estimates for each effect:
+sstable$PES <- c(sstable$'Sum Sq'[-nrow(sstable)], NA)/(sstable$'Sum Sq' + sstable$'Sum Sq'[nrow(sstable)]) 
+# Creating an html ANOVA table 
+options(knitr.kable.NA = '') # this will hide missing values in the kable table
+kable(sstable, digits = 3, caption = "Proteobacteria ANOVA table") %>%
+  kable_styling(full_width = FALSE)
+
+# Breusch-Pagan test for heteroskedasticity 
+# p>0.05, so we fail to reject the null hypothesis that the variance of the residuals is constant
+lmtest::bptest(lm)
+
+# Posthoc multiple comparisons via tukey's HSD test in agricolae
+# P-values
+agricolae::HSD.test(lm,"Diet", group=TRUE,
+                main="Affect of Diet on Proteobacteria", console=TRUE)
+
+# Create 2x2 plot environment
+par(mfrow = c(2, 2), mar=c(5,6,4,1)+.1)
+# Plot data
+boxplot((log(Proteo$Abundance)) ~ Diet, data=Proteo,
+        ylab="Log Transformed \n Relative Abundance (RA) ",
+        xlab="Diet", main = "Proteobacteria RA (%)")
+# Plot residules histogram
+x = (residuals(lm))
+plotNormalHistogram(x, main = "Residules Histogram")
+# Normal probability plot 
+qqnorm(residuals(lm), ylab="Sample Quantiles \n for Residuals", main = "Normal Probability Plot")
+qqline(residuals(lm), col="red")
+# Simple scatterplot between residuals and predicted values. It should look more or less random.
+plot(fitted(lm), residuals(lm), main = "Residuals vs. Predicted Values")
+```
+
+###Fig 7 Beta Diversity, Panel C
+####Now export otu and taxa tables from phyloseq for codaseq
+```{r}
+otu = as(otu_table(AID2), "matrix")
+taxon = as(tax_table(AID2), "matrix")
+metadata = as(sample_data(AID2), "matrix")
+otu = as.data.frame(otu)
+alex.in <- otu
+taxon = as.data.frame(taxon)
+samples = as.data.frame(metadata) # needs to be unique for plotting later
+```
+
+####Imput zero values and conduct the Aitchison center-log-ratio (CLR) transformation.
+```{r}
+# count number of zeros in the table
+sum(otu == 0)
+# Replace 0 values with an estimate (because normalization is taking log, can't have 0) using the Bayesian-multiplicative replacement function cmultRepl in Zcompositions. Also transposing here, because we need samples as rows.
+d.czm <- zCompositions::cmultRepl(t(otu), method="CZM", label=0)
+# Perform the centred log-ratio, or CLR (Aitchison) transformation using CoDaSeq.  
+# The output will have samples as ROWS
+d.clr <- CoDaSeq::codaSeq.clr(d.czm)
+```
+
+####Aitchison distance PCA
+```{r}
+# Samples must be ROWs and features/OTUs as COLUMNS. Use the prcomp included in the R core statistics.
+d.pcx <- prcomp(d.clr)
+```
+
+```{r, fig.align='center', out.width="60%"}
+# Plot PCA with ggplot2 (showing samples only)
+df_out <- as.data.frame(d.pcx$x)
+theme_set(theme_bw()+theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank()))
+
+autoplot(prcomp(d.clr), data = samples, colour = 'Diet')+
+  geom_point(aes(color = samples$Diet), size = 3)+ 
+  theme(legend.title = element_text(size=14))+theme(legend.text = element_text(size=12))+
+  scale_color_manual(values = cols)+
+  labs(color="Diet") +
+   theme(aspect.ratio = 1, # set plot to square
+        axis.title = element_text(size=14), 
+        axis.text=element_text(size=12))
+```
+
+####Statistics for Fig 7c (betadiversity)
+```{r}
+# Permanova between groups using Aitchison distance.
+dist.clr <- dist(d.clr)
+perm<-adonis(dist.clr~Diet*Cage, as(sample_data(AID2),"data.frame"))
+print(perm)
+```
+
+Define the function: Make knitr table from Permanova results. https://rdrr.io/github/TBrach/MicrobiomeX/src/R/Functions.R
+```{r definition, echo = FALSE}
+get_permanova_table <- function(adonis) {
+  kable_table <- adonis[[1]]
+  kable_table[["Pr(>F)"]] <- format(kable_table[["Pr(>F)"]], digits = 3)
+  options(knitr.kable.NA = '') 
+  knitr::kable(kable_table,
+               digits = 3,
+               caption = "Permanova results") %>%
+  kable_styling(full_width = FALSE)
+}
+```
+
+```{r}
+get_permanova_table
+```
+
+Use the function:
+```{r}
+get_permanova_table(perm)
+```
+
+```{r}
+# Pairwise adonis
+# https:https://www.rdocumentation.org/packages/RVAideMemoire/versions/0.9-69/topics/pairwise.perm.manova
+RVAideMemoire::pairwise.perm.manova(dist.clr,samples$Diet,nperm=999,p.method="fdr")
+```
+
+```{r}
+# Run permdisp to see if statistical differences among communities are driven by differences in variance.
+permdisp<-betadisper(dist.clr,samples$Diet)
+aov <-anova(permdisp) #this was not significant 
+# Creating an html ANOVA table 
+options(knitr.kable.NA = '') # this will hide missing values in the kable table
+kable(aov, digits = 3, caption = "Permdisper ANOVA table") %>%
+  kable_styling(full_width = FALSE)
+```
+
+####Alpha Diversity
+```{r, fig.align='center', out.width="80%"}
+# Rarefy to account for differences in sequencing depth among samples. Sample without replacement so that the original 
+# count value is the maximum possible. Trim OTUs from the dataset that are no longer observed in any sample (have a
+# count of zero in every sample).
+set.seed(310)
+AID_R = rarefy_even_depth(AID2, sample.size = 30000, replace = FALSE, trimOTUs = TRUE)
+
+shannon<-estimate_richness(AID_R, split = TRUE, measures=c("Shannon"))
+shannon$SampleID <- rownames(shannon)
+# Faith's Phylogenetic Diversity (SR = observed species richness)
+FaithsPD<-btools::estimate_pd(AID_R)
+colnames(FaithsPD)[1] <-"Faiths_PD"
+FaithsPD$SampleID <- rownames(FaithsPD)
+# Merge tables
+alpha_div <- full_join(shannon,FaithsPD, by = "SampleID")
+alpha_div <- alpha_div[,c(2,1,3)]
+# Add metadata
+alpha_div <- full_join(alpha_div,samples, by = "SampleID")
+alpha_div$Cage<-as.numeric(as.character(alpha_div$Cage))
+# Write out file
+write.csv(alpha_div,"./R_output/alpha_div.csv")
+
+# Summarize for stats and plotting
+fpd <- Rmisc::summarySE(alpha_div, measurevar="Faiths_PD", groupvars=c("Diet"))
+shan <- Rmisc::summarySE(alpha_div, measurevar="Shannon", groupvars=c("Diet"))
+# Write out file
+write.csv(fpd,"./R_output/Faiths_PD_Summary.csv")
+write.csv(shan,"./R_output/Shannon_Summary.csv")
+
+# Histograms
+# Create 2x2 plot environment  
+par(mfrow = c(2, 2))
+# Plot each Metric
+plotNormalHistogram(alpha_div$Faiths_PD, main= "Faiths PD")
+plotNormalHistogram(alpha_div$Shannon, main= "Shannon Index")
+plotNormalHistogram((log(alpha_div$Faiths_PD)), main= "log(Faiths PD)")
+
+# Test for normality 
+shapiro.test(alpha_div$Shannon) 
+shapiro.test(log(alpha_div$Faiths_PD)) 
+```
+
+####Fig 7 Alpha Diversity, Panels A-C
+```{r, fig.align='center', out.width="80%"}
+# Re-arrange for plotting
+alpha_div$Diet <- factor(sample_data(alpha_div)$Diet, levels = c("REG","SAD","AID-SAD","AID"))
+
+# Set plotting theme 
+theme_set(theme_bw())
+
+# Plot Shannon
+Shannon_plot <- ggplot(alpha_div, aes(x=Diet, y=Shannon,  fill=Diet)) + 
+  geom_boxplot(outlier.size = 1) + scale_fill_manual(values = cols) + geom_boxplot(outlier.size = 1) +  
+  labs(x = " ",y = "Evenness \n (Shannon Index)") + theme(legend.position="none") + ylim (1,5) + 
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+  theme(text = element_text(size=14),axis.text.x=element_text(size=11)) 
+
+# Plot Faith's PD
+PD_plot <- ggplot(alpha_div, aes(x=Diet, y=Faiths_PD,  fill=Diet)) + 
+  geom_boxplot(outlier.size = 1) + scale_fill_manual(values = cols) + geom_boxplot(outlier.size = 1) + 
+  labs(x = " ",y = "Phylogenetic Diversity \n (Faith's PD)") + theme(legend.position="none") + ylim (5,20) + 
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+  theme(text = element_text(size=14),axis.text.x=element_text(size=11)) 
+
+# Combine Plots
+theme_set(theme_bw(base_size=14)) # reduce default font size
+AlphaDiv_Plot <- plot_grid(Shannon_plot, PD_plot, align = 'v', ncol = 1, axis='l')
+AlphaDiv_Plot
+```
+
+###Statistics for Fig 7
+
+####Shannon Index
+```{r, fig.align='center', out.width="80%"}
+lm <-glm(Shannon ~ Diet*Cage, data=alpha_div)
+summary(lm)
+car::vif(lm)
+sstable <-car::Anova(lm , type = c(3), test.statistic=c("F"), contrasts=list(topic=contr.sum, sys=contr.sum))
+
+# The following code adds a column to the sstable object with partial eta-squared estimates for each effect:
+sstable$PES <- c(sstable$'Sum Sq'[-nrow(sstable)], NA)/(sstable$'Sum Sq' + sstable$'Sum Sq'[nrow(sstable)]) 
+# Creating an html ANOVA table 
+options(knitr.kable.NA = '') # this will hide missing values in the kable table
+kable(sstable, digits = 3, caption = "Shannon Index ANOVA table") %>%
+  kable_styling(full_width = FALSE) 
+
+# Posthoc multiple comparisons via tukey's HSD test in agricolae
+# P-values
+agricolae::HSD.test(lm,"Diet", group=FALSE,
+                main="Affect of Diet on Shannon Index", console=TRUE)
+
+# Create 2x2 plot environment
+par(mfrow = c(2, 2))
+# Plot data
+boxplot(Shannon ~ Diet, data = alpha_div,
+        ylab="Shannon",
+        xlab="Diet", main = "Shannon Boxplot")
+# Plot residules histogram
+x = (residuals(lm))
+plotNormalHistogram(x, main = "Residules Histogram")
+# Normal probability plot 
+qqnorm(residuals(lm), ylab="Sample Quantiles for Residuals")
+qqline(residuals(lm), col="red")
+# Simple scatterplot between residuals and predicted values. It should look more or less random.
+plot(fitted(lm), residuals(lm), main = "Residuals vs. Predicted Values")
+```
+
+####Faith's PD
+```{r, fig.align='center', out.width="80%"}
+lm <-glm((log(Faiths_PD)) ~ Diet*Cage, data=alpha_div)
+summary(lm)
+car::vif(lm)
+sstable <-car::Anova(lm , type = c(3), test.statistic=c("F"), contrasts=list(topic=contr.sum, sys=contr.sum))
+
+# The following code adds a column to the sstable object with partial eta-squared estimates for each effect:
+sstable$PES <- c(sstable$'Sum Sq'[-nrow(sstable)], NA)/(sstable$'Sum Sq' + sstable$'Sum Sq'[nrow(sstable)]) 
+# Creating an html ANOVA table 
+options(knitr.kable.NA = '') # this will hide missing values in the kable table
+kable(sstable, digits = 3, caption = "Faith's PD ANOVA table") %>%
+  kable_styling(full_width = FALSE)
+
+# Posthoc multiple comparisons via tukey's HSD test in agricolae
+# P-values
+agricolae::HSD.test(lm,"Diet", group=FALSE,
+                main="Affect of Diet on Faiths PD", console=TRUE)
+
+# Create 2x2 plot environment
+par(mfrow = c(2, 2))
+# Plot data
+boxplot((log(Faiths_PD)) ~ Diet, data = alpha_div,
+        ylab="PD",
+        xlab="Diet", main = "Faiths PD Boxplot")
+# Plot residules histogram
+x = (residuals(lm))
+plotNormalHistogram(x, main = "Residules Histogram")
+# Normal probability plot 
+qqnorm(residuals(lm), ylab="Sample Quantiles for Residuals")
+qqline(residuals(lm), col="red")
+# Simple scatterplot between residuals and predicted values. It should look more or less random.
+plot(fitted(lm), residuals(lm), main = "Residuals vs. Predicted Values")
+```
+
+#####ANCOM-II at the genus level
+Download the ANCOM v2.1 script from here: https://github.com/FrederickHuangLin/ANCOM
+```{r}
+source("~/Box/ANCOM-master/scripts/ancom_v2.1.R")
+AID_g = tax_glom(AID2, taxrank = "Genus")
+AID_g 
+otu = as(otu_table(AID_g), "matrix")
+otu_data = as.data.frame(otu)
+
+# Make new datafram for taxa
+ID.taxa <- as.data.frame(tax_table(AID_g))
+ID.taxa<- rownames_to_column(ID.taxa, var = "taxa_id") 
+ID.taxa <- ID.taxa %>% unite("Taxa", 3:7, sep = ", ", remove = FALSE) %>% dplyr::select(taxa_id,Taxa)
+
+
+metadata = as(sample_data(AID_g), "matrix")
+meta_data= as.data.frame(metadata)
+meta_data = meta_data %>% dplyr::rename("Sample.ID" = SampleID)
+rownames(meta_data) <- c()
+
+# Step 1: Data preprocessing
+feature_table = otu_data; sample_var = "Sample.ID"; group_var = NULL
+out_cut = 0.05; zero_cut = 0.90; lib_cut = 1000; neg_lb = FALSE
+prepro = feature_table_pre_process(feature_table, meta_data, sample_var, group_var, 
+                                   out_cut, zero_cut, lib_cut, neg_lb)
+feature_table = prepro$feature_table # Preprocessed feature table
+meta_data = prepro$meta_data # Preprocessed metadata
+struc_zero = prepro$structure_zeros # Structural zero info
+
+# Step 2: ANCOM
+main_var = "Diet"; p_adj_method = "BH"; alpha = 0.05
+adj_formula = "Cage"; rand_formula = NULL
+t_start = Sys.time()
+res = ANCOM(feature_table, meta_data, struc_zero, main_var, p_adj_method, 
+            alpha, adj_formula, rand_formula)
+t_end = Sys.time()
+t_run = t_end - t_start
+res_df<-res$out
+res2 <- res_df[which(res_df$detected_0.7==TRUE),] 
+res2 <- left_join(res2,  ID.taxa, by="taxa_id")
+print(res2$Taxa)
+```
+
+#####Indispecies at Genus level
+```{r}
+# Extract abundance matrix from the phyloseq object
+OTU1 = as(otu_table(AID_g ), "matrix")
+# Coerce to data.frame and transpose (need samples as ROWS and ASVs as COLUMNS)
+OTUdf = as.data.frame(t(OTU1))
+
+# Make new datafram for taxa
+ID.taxa <- as.data.frame(tax_table(AID_g))
+ID.taxa<- rownames_to_column(ID.taxa, var = "ID") 
+ID.taxa <- ID.taxa %>% unite("Taxa", 3:7, sep = ", ", remove = FALSE) %>% dplyr::select(ID,Taxa)
+
+# Prepare mapping file
+metadata = as(sample_data(AID_g), "matrix")
+mapping_file = as.data.frame(metadata)
+# First column (SampleID) should be row names
+# Remove SampleID column
+mapping_file[1] <- NULL
+# Make sure the order of the sample names in both match
+nrow(mapping_file)==nrow(OTUdf)
+
+# Create factor name to call for Uniqueclass
+OTUs.Diet<-as.factor(mapping_file$Diet)
+is.factor(OTUs.Diet) #should be TRUE
+
+# Indicator species analysis by unique site*tree identifier
+indisp<-multipatt(x=as.data.frame(OTUdf),
+                          cluster=OTUs.Diet,
+                          func="IndVal.g",
+                          duleg=TRUE,
+                          #restcomb = c(1,2,3,4,5,9),
+                          control=how(nperm=9999))
+
+# Extract table of stats
+indisp.sign<-as.data.table(indisp$sign, keep.rownames=TRUE)
+# Add adjusted p-value
+indisp.sign[ ,p.value.fdr:=p.adjust(p.value, method="fdr")]
+# Now can select only the indicators with adjusted significant p-values
+tab1<- indisp.sign[p.value.fdr<=0.05, ]
+tab1<-tab1%>%dplyr::rename(ID = rn)
+
+# Add taxa information and write out
+indicators_genus<- inner_join(tab1, ID.taxa, by ="ID")
+write.csv(indicators,"./R_output/indicator_OTUs_summary_wgenus.csv")
+print(indicators_genus)
+
+# Get summary information of OTUs that are indicators.
+# Note this does not include the FDR adjusted p-values.
+print(summary(indisp, alpha=0.05, Bt=0.75 ,indvalcomp=TRUE))
+
+```
+
+####Fig 8 Heat map of bacterial indicators of diet at the genus level
+```{r, fig.align='left', fig.width = 12, fig.asp = .62}
+AID_g
+# log(1+x) transformation
+AID_gt <- microbiome::transform(AID_g, 'log10p')
+otu = as(otu_table(AID_gt), "matrix")
+otu = as.data.frame(otu)
+metadata = as(sample_data(AID_gt), "matrix")
+samples= as.data.frame(metadata)
+
+# Make new datafram for taxa
+ID.taxa <- as.data.frame(tax_table(AID_gt))
+ID.taxa<- rownames_to_column(ID.taxa, var = "ID") 
+ID.taxa <- ID.taxa %>% unite("Taxa", 3:7, sep = ", ", remove = FALSE) %>% dplyr::select(ID,Taxa)
+
+# Significant ASVs
+list <-c("node144" , "node54", "node17" ,  "node55" , "node207", "node162")
+
+# Subset the otu table to include only the otus that were significant indicators
+# Add taxonomy
+map <- subset(otu, rownames(otu) %in% list)
+map <- map %>% rownames_to_column(var = "ID") 
+map <- dplyr::inner_join(map, ID.taxa, by ="ID")
+map <- map %>% mutate(Taxa = str_replace(Taxa, "Candidatus Arthromitus", "Candidatus"))
+# Get ASV names for row annotation
+annotation_row <- map %>% dplyr::select(Taxa) 
+# Get rid of rownames then reassign to ASV name
+rownames(map) <- c()
+map <-  map %>% column_to_rownames(var = "Taxa")
+
+
+# Get column order
+sample_order <- samples %>% 
+  arrange(factor(Diet, levels = c("SAD", "REG","AID", "AID-SAD"))) %>% 
+   dplyr::pull(SampleID)
+# Match columns in map to the list in sample_order
+map <- map[sample_order]
+   
+# Set column annotations
+annotation_col <- samples %>%
+  arrange(factor(Diet, levels = c("SAD", "REG","AID", "AID-SAD"))) %>% 
+  column_to_rownames(var = "SampleID") %>%
+  dplyr::select(Diet) 
+
+# Set row annotations
+annotation_row <- read_csv("annotation_row_genus.csv", col_names = TRUE)
+annotation_row <-  annotation_row %>% column_to_rownames(var = "Genus")
+
+
+# https://sashat.me/2017/01/11/list-of-20-simple-distinct-colors/
+# Assign colors
+my_colour = list(
+  Diet = c("REG" = "#00517f", "SAD" = "#bc5300", "AID-SAD" = "#f0e442", "AID" = "#009e73" ),
+  "ANCOM-II" = c("Significant"="#000000", "Not Significant"="#ffffff"),
+  "indicspecies" = c("Significant"="#000000", "Not Significant"="#ffffff")
+  
+)
+
+# Heatmap with pheatmap
+# Export eps at 1000x300
+hm<-pheatmap(map, clustering_distance_cols = "euclidean", clustering_distance_rows = "euclidean", border_color = "grey60",
+             clustering_method = 'complete', fontsize =8, cluster_rows = T, cluster_cols = T,
+             annotation_col = annotation_col, annotation_row = annotation_row, annotation_colors = my_colour,
+             fontsize_row = 8, fontsize_col = 8, fontsize_number = 8, 
+             cellwidth = 10, cellheight = 10, cutree_cols =3, cutree_rows = 2
+)
+hm
+```
+
+```{r}
+sessionInfo()
+```

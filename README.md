@@ -2,6 +2,9 @@
 THE SAD WEEKEND: A PERILOUS NORTH AMERICAN TRADITION
 <h3>Description:</h3>
 <p>To determine how diet affects the gut microbiota, pain, and recovery from inflammatory injury, CD1 mice (ICR:Crl) were fed diets varying in fat source: 1) standard chow (REG; NIH-31, Harlan Teklad), 2) standard American Diet (SAD, Envigo TD.140536), 3) Anti-Inflammatory Diet (AID, Envigo TD.150364). A fourth diet group was included to determine the effect of alternating between the diets in which mice were fed the AID diet Monday to Friday and the SAD diet on Saturday and Sunday. This diet shift aimed to model a pattern of eating that included "cheat days" on the weekends with healthy eating during the week. After 14 weeks of diet exposure, when mice were 16 weeks old, a fecal pellet was collected for sequencing of the microbial 16S rRNA gene.</p>
+
+<a href="https://doi.org/10.5281/zenodo.4021079"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.4021079.svg" alt="DOI"></a>
+
 <h3>Requirements:</h3>
 <p>Some of the key R packages used in the analysis are:</p>
 <ul>

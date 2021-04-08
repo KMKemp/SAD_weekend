@@ -16,3 +16,7 @@ THE SAD WEEKEND: A PERILOUS NORTH AMERICAN TRADITION
 </ul>
 <h3>Raw Data:</h3>
 <p><span>The original sequencing reads are available for download via NCBI&rsquo;s Sequence Read Archive under&nbsp;<a href="https://www.ncbi.nlm.nih.gov/sra/PRJNA615647" rel="nofollow">Bioproject&nbsp;<strong _ngcontent-atv-c11="" class="left">PRJNA615647</strong>.</a></span></p>
+
+<h3>Paper:</h3>
+<p><span>Stacie K. Totsch, Keri M. Kemp, Salvador A. Lopez, Tammie L. Quinn, Remy Y. Meir, Barbara A. Gower, Robert E. Sorge, The sad weekend: A perilous North American tradition, Neurobiology of Pain, Volume 8, 2020, 100053, <a href="https://www.sciencedirect.com/science/article/pii/S2452073X20300118">https://doi.org/10.1016/j.ynpai.2020.100053.</a>
+<p><span>
